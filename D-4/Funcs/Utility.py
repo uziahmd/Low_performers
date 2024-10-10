@@ -22,6 +22,7 @@ PATH_RESULTS = '/var/nfs_share/Overfitting/D-4/Results'
 PATH_SAVE = '/var/nfs_share/Overfitting/D-4/Intermediate/Save/'
 PATH_SAVE_STEPS = '/var/nfs_share/Overfitting/D-4/Intermediate/Save_Steps/'
 PATH_SAVE_CALORIES = '/var/nfs_share/Overfitting/D-4/Intermediate/Save_CALORIES/'
+PATH_SAVE_COMBI = '/var/nfs_share/Overfitting/D-4/Intermediate/Save_COMBI/'
 
 PATH_INTERMEDIATE = '/var/nfs_share/Overfitting/D-4/Intermediate'
 RANDOM_STATE =42
