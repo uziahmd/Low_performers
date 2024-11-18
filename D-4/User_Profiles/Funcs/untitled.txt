@@ -1,0 +1,232 @@
+import numpy as np
+import pandas as pd
+from scipy import stats as sp
+from sklearn.preprocessing import StandardScaler
+from functools import reduce
+import matplotlib.pyplot as plt
+import seaborn as sns
+import logging
+from typing import Dict, List
+
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
+
+def extract_numeric_features(window_data: np.ndarray) -> Dict[str, float]:
+    """
+    Extracts numeric features from a numpy array.
+
+    Parameters:
+        window_data (np.ndarray): Array of numeric data within the window.
+
+    Returns:
+        Dict[str, float]: Dictionary of extracted features.
+    """
+    if len(window_data) == 0:
+        return {}
+
+    features = {}
+    try:
+        features['MED'] = np.median(window_data)
+        features['MIN'] = np.min(window_data)
+        features['MAX'] = np.max(window_data)
+        features['AVG'] = np.mean(window_data)
+        features['VAR'] = np.var(window_data, ddof=1)
+        features['SKW'] = sp.skew(window_data, bias=False)
+        features['KUR'] = sp.kurtosis(window_data, bias=False)
+        features['ASC'] = np.sum(np.abs(np.diff(window_data)))
+        
+        # Binned Entropy (n = 10)
+        hist, _ = np.histogram(window_data, bins=10, density=False)
+        features['BEP'] = sp.entropy(hist)
+        
+        # Auto-correlation Features
+        acf = sp.correlate(window_data - np.mean(window_data), window_data - np.mean(window_data), mode='full')
+        acf = acf[len(acf)//2:]
+        if len(acf) > 1:
+            features['MAXLAG'] = np.argmax(acf[1:]) + 1  # exclude zero lag
+            features['MAXLAGVAL'] = np.max(acf[1:])
+            features['MINLAG'] = np.argmin(acf[1:]) + 1
+            features['MINLAGVAL'] = np.min(acf[1:])
+        else:
+            features['MAXLAG'] = 0
+            features['MAXLAGVAL'] = 0
+            features['MINLAG'] = 0
+            features['MINLAGVAL'] = 0
+        
+        # Linear Trend
+        slope, intercept, _, _, _ = sp.linregress(np.arange(len(window_data)), window_data)
+        features['LTS'] = slope
+        features['LTI'] = intercept
+        
+        # Time-series Complexity
+        std_dev = np.std(window_data)
+        if std_dev != 0:
+            norm_x = (window_data - np.mean(window_data)) / std_dev
+        else:
+            norm_x = np.zeros(len(window_data))
+        features['CID'] = np.sqrt(np.sum(np.diff(norm_x) ** 2))
+        
+    except Exception as e:
+        logger.error(f"Error extracting numeric features: {e}")
+    
+    return features
+    
+def extract_nominal_features(window_data: np.ndarray, is_bounded: bool) -> Dict[str, float]:
+    """
+    Extracts nominal features from a numpy array.
+
+    Parameters:
+        window_data (np.ndarray): Array of nominal data within the window.
+        is_bounded (bool): Indicates if the feature has a bounded support.
+
+    Returns:
+        Dict[str, float]: Dictionary of extracted features.
+    """
+    if len(window_data) == 0:
+        return {}
+    
+    features = {}
+    try:
+        unique_values, counts = np.unique(window_data, return_counts=True)
+        entropy = sp.entropy(counts)
+        features['ETP'] = entropy
+        features['ASC'] = np.sum(window_data[1:] != window_data[:-1])
+        
+        if is_bounded:
+            support_features = {f'SUP:{val}': count for val, count in zip(unique_values, counts)}
+            features.update(support_features)
+    except Exception as e:
+        logger.error(f"Error extracting nominal features: {e}")
+    
+    return features
+
+def impute_support_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Imputes missing support features by filling NaNs with 0.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame containing support features.
+
+    Returns:
+        pd.DataFrame: DataFrame with imputed support features.
+    """
+    support_features = df.columns[df.columns.str.startswith('SUP:')]
+    df[support_features] = df[support_features].fillna(0)
+    return df
+
+def sliding_window_feature_extraction(
+    combined_df: pd.DataFrame,
+    window_size_minutes: int,
+    step_size_minutes: int = None,
+    selected_features: List[str] = None
+) -> pd.DataFrame:
+    """
+    Extracts sliding window features from the combined DataFrame.
+
+    Parameters:
+        combined_df (pd.DataFrame): Combined DataFrame with MultiIndex (pcode, timestamp).
+        window_size_minutes (int): Size of the sliding window in minutes.
+        step_size_minutes (int, optional): Step size in minutes. Defaults to window_size_minutes (non-overlapping windows).
+        selected_features (List[str], optional): List of features to extract. If None, all features are used.
+
+    Returns:
+        pd.DataFrame: DataFrame containing extracted features with MultiIndex (pcode, window_end_time).
+    """
+    if step_size_minutes is None:
+        step_size_minutes = window_size_minutes  # Default to non-overlapping windows
+    
+    extracted_features = []
+    
+    # Ensure the DataFrame is sorted by pcode and timestamp
+    combined_df = combined_df.sort_index(level=['pcode', 'timestamp'])
+    
+    for pcode, group in combined_df.groupby(level='pcode'):
+        group = group.reset_index(level='pcode', drop=True)
+        
+        # Set timestamp as datetime index
+        group = group.set_index('timestamp')
+        
+        # Resample to ensure uniform time intervals if necessary
+        # This depends on your data; adjust as needed
+        # group = group.resample('1T').asfreq().fillna(0)
+        
+        # Define the sliding window
+        start_time = group.index.min()
+        end_time = group.index.max()
+        
+        current_start = start_time
+        current_end = current_start + pd.Timedelta(minutes=window_size_minutes)
+        
+        while current_end <= end_time:
+            window = group[current_start:current_end]
+            feature_row = {}
+            feature_row['pcode'] = pcode
+            feature_row['window_end_time'] = current_end
+            
+            for feature in window.columns:
+                data = window[feature].dropna().values
+                if len(data) == 0:
+                    continue  # Skip if no data in window
+                
+                if feature in ['MSG_SNT', 'MSG_RCV', 'MSG_ALL', 'CALL_DUR']:
+                    # Numeric features
+                    numeric_feats = extract_numeric_features(data)
+                    # Prefix feature name
+                    numeric_feats = {f"{feature}#{k}": v for k, v in numeric_feats.items()}
+                    feature_row.update(numeric_feats)
+                else:
+                    # Nominal features (if any)
+                    # Assuming nominal features are non-numeric
+                    nominal_feats = extract_nominal_features(data, is_bounded=True)
+                    nominal_feats = {f"{feature}#{k}": v for k, v in nominal_feats.items()}
+                    feature_row.update(nominal_feats)
+            
+            extracted_features.append(feature_row)
+            
+            # Move the window
+            current_start += pd.Timedelta(minutes=step_size_minutes)
+            current_end = current_start + pd.Timedelta(minutes=window_size_minutes)
+    
+    feature_df = pd.DataFrame(extracted_features)
+    feature_df = feature_df.set_index(['pcode', 'window_end_time'])
+    
+    # Impute support features
+    feature_df = impute_support_features(feature_df)
+    
+    return feature_df
+
+def normalize_features(feature_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalizes the features using StandardScaler.
+
+    Parameters:
+        feature_df (pd.DataFrame): DataFrame containing extracted features.
+
+    Returns:
+        pd.DataFrame: Normalized DataFrame.
+    """
+    scaler = StandardScaler()
+    scaled_data = scaler.fit_transform(feature_df)
+    scaled_df = pd.DataFrame(scaled_data, index=feature_df.index, columns=feature_df.columns)
+    return scaled_df
+
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+def perform_kmeans_clustering(scaled_df: pd.DataFrame, n_clusters: int) -> pd.Series:
+    """
+    Performs K-Means clustering on the scaled feature DataFrame.
+
+    Parameters:
+        scaled_df (pd.DataFrame): Scaled feature DataFrame.
+        n_clusters (int): Number of clusters.
+
+    Returns:
+        pd.Series: Cluster labels for each user-window.
+    """
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    cluster_labels = kmeans.fit_predict(scaled_df)
+    return pd.Series(cluster_labels, index=scaled_df.index, name='Cluster')
+

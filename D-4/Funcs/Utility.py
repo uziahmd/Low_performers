@@ -31,24 +31,34 @@ RANDOM_STATE =42
 #LABEL_THRESHOLD = 87  # D#1: 31, D#2: 31, D#3: 108, D#4: 87
 seed= RANDOM_STATE
 DATA_TYPES = {
-    'Fitness-Calorie': 'CAL',
-    'AppUsageEvent': 'APP',
-    'BatteryEvent': 'BAT',
-    'CallEvent': 'CALL',
-    'DataTraffic': 'DATA',
-    'InstalledApp': 'INST',
+    # 'ActivityEvent': 'ACE', #newly added
+    # 'ActivityTransition': 'ACT',  #newly added
+    # 'WirelessStateEvent': 'WLS',#newly added
+    # 'Fitness-Calorie': 'FCL',
+    # "Fitness-Activity": "FAC", #newly added
+    # "Fitness-Distance": "FDI", #newly added
+    # "Fitness-StepCount": "FST", #newly added
+    # 'AppUsageEvent': 'APP',
+    # 'BatteryEvent': 'BAT',
+    # 'CallEvent': 'CALL',
+    # 'DataTraffic': 'DATA',
+    # 'InstalledApp': 'INST',
     'Location': 'LOC',
-    'MessageEvent': 'MSG',
-    'WiFiScan': 'WIFI',
-    'ScreenEvent': 'SCR',
-    'RingerModeEvent': 'RING',
-    'ChargeEvent': 'CHG',
-    'PowerSaveEvent': 'PWR',
-    'OnOffEvent': 'ONOFF',
-    'BluetoothScan':'BT',
-    'DozeModeEvent': 'Dozemode',
-    'Fitbit-HeartRate':'Heartrate',
-    'NotificationEvent': 'Notification'
+    # 'MessageEvent': 'MSG',
+    # 'WifiScan': 'WIFI',
+    # 'ScreenEvent': 'SCR',
+    # 'RingerModeEvent': 'RING',
+    # 'ChargeEvent': 'CHG',
+    # 'PowerSaveEvent': 'PWR',
+    # 'OnOffEvent': 'ONOFF',
+    # 'BluetoothScan':'BT',
+    # 'DozeModeEvent': 'Dozemode',
+    # 'Fitbit-HeartRate':'FitbitHeartrate',
+    # 'Fitbit-StepCount':'FitbitStepcount', #newly added
+    # 'Fitbit-Calorie':'Fitbitcalorie', #newly added
+    # 'Fitbit-Distance':'Fitbitdistance', #newly added
+    # 'KeyEvent':'keyevent', #newly added
+    # 'NotificationEvent': 'Notification'
 }
 
 
@@ -109,20 +119,56 @@ def summary(x):
                 'nan_count': n_nan
             }
         
-def _load_data(
-    name: str
-) -> Optional[pd.DataFrame]:
+# def _load_data(
+#     name: str
+# ) -> Optional[pd.DataFrame]:
+#     paths = [
+#         (d, os.path.join(PATH_SENSOR, d, f'{name}.csv'))
+#         for d in os.listdir(PATH_SENSOR)
+#         if d.startswith('P')
+#     ]
+#     return pd.concat(
+#         filter(
+#             lambda x: len(x.index), 
+#             [
+#                 pd.read_csv(p).assign(pcode=pcode)
+#                 for pcode, p in paths
+#                 if os.path.exists(p)
+#             ]
+#         ), ignore_index=True
+#     ).assign(
+#         timestamp=lambda x: pd.to_datetime(x['timestamp'], unit='ms', utc=True).dt.tz_convert(DEFAULT_TZ)
+#     ).set_index(
+#         ['pcode', 'timestamp']
+#     )
+
+def _load_data(name: str) -> Optional[pd.DataFrame]:
     paths = [
         (d, os.path.join(PATH_SENSOR, d, f'{name}.csv'))
         for d in os.listdir(PATH_SENSOR)
         if d.startswith('P')
     ]
+    
+    # Debugging: Print the paths being checked
+    print(f"Paths for {name}: {paths}")
+    
+    valid_paths = [
+        (pcode, p) for pcode, p in paths if os.path.exists(p)
+    ]
+    
+    # Debugging: Print the valid paths found
+    print(f"Valid paths for {name}: {valid_paths}")
+    
+    if not valid_paths:
+        print(f"No valid paths found for {name}")
+        return pd.DataFrame()  # Return an empty DataFrame if no valid paths
+    
     return pd.concat(
         filter(
             lambda x: len(x.index), 
             [
                 pd.read_csv(p).assign(pcode=pcode)
-                for pcode, p in paths
+                for pcode, p in valid_paths
                 if os.path.exists(p)
             ]
         ), ignore_index=True
@@ -131,6 +177,8 @@ def _load_data(
     ).set_index(
         ['pcode', 'timestamp']
     )
+
+
 
 @contextmanager
 def on_ray(*args, **kwargs):
